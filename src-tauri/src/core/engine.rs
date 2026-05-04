@@ -1,6 +1,7 @@
 use crate::core::audio::AudioCapturer;
-use crate::core::stt::BasicTranscriber;
 use crate::core::injection::TextInjector;
+use crate::core::refinement::RefinementEngine;
+use crate::core::stt::BasicTranscriber;
 
 use global_hotkey::GlobalHotKeyEvent;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", content = "message")]
 pub enum EngineState {
     Idle,
@@ -24,18 +25,41 @@ pub enum EngineState {
 pub struct CoreEngine {
     audio: Arc<Mutex<AudioCapturer>>,
     stt: Arc<BasicTranscriber>,
+    refinement: Option<Arc<RefinementEngine>>,
     app_handle: AppHandle,
     hotkey_id: u32,
 }
 
 impl CoreEngine {
     pub fn new(app_handle: AppHandle, hotkey_id: u32) -> Result<Self, String> {
+        let refinement = Self::initialize_refinement_safely();
+
         Ok(Self {
             audio: Arc::new(Mutex::new(AudioCapturer::new())),
             stt: Arc::new(BasicTranscriber::new()?),
+            refinement,
             app_handle,
             hotkey_id,
         })
+    }
+
+    fn initialize_refinement_safely() -> Option<Arc<RefinementEngine>> {
+        match panic::catch_unwind(AssertUnwindSafe(RefinementEngine::new)) {
+            Ok(Ok(engine)) => Some(Arc::new(engine)),
+            Ok(Err(e)) => {
+                eprintln!(
+                    "Refinement engine unavailable; raw transcripts will be used: {}",
+                    e
+                );
+                None
+            }
+            Err(_) => {
+                eprintln!(
+                    "Refinement engine initialization panicked; raw transcripts will be used."
+                );
+                None
+            }
+        }
     }
 
     fn emit_state(&self, state: EngineState) {
@@ -49,6 +73,25 @@ impl CoreEngine {
             Ok(result) => result,
             Err(_) => Err("STT engine panicked during transcription".to_string()),
         }
+    }
+
+    fn clean_safely(&self, raw_text: String) -> String {
+        let Some(refinement) = &self.refinement else {
+            return raw_text;
+        };
+
+        let fallback = raw_text.clone();
+        match panic::catch_unwind(AssertUnwindSafe(|| refinement.clean(raw_text))) {
+            Ok(cleaned) => cleaned,
+            Err(_) => {
+                eprintln!("Refinement engine panicked before fallback; using raw transcript.");
+                fallback
+            }
+        }
+    }
+
+    fn successful_text_states() -> [EngineState; 2] {
+        [EngineState::Cleaning, EngineState::Inserting]
     }
 
     pub fn run(&self) {
@@ -77,9 +120,10 @@ impl CoreEngine {
                                         self.emit_state(EngineState::Recording);
                                     }
                                     Err(e) => {
-                                        self.emit_state(EngineState::Error(
-                                            format!("Microphone access failed: {}", e),
-                                        ));
+                                        self.emit_state(EngineState::Error(format!(
+                                            "Microphone access failed: {}",
+                                            e
+                                        )));
                                         // Return to idle after error
                                         thread::sleep(Duration::from_secs(2));
                                         self.emit_state(EngineState::Idle);
@@ -105,18 +149,25 @@ impl CoreEngine {
 
                                     match self.transcribe_safely(&audio_data) {
                                         Ok(text) => {
-                                            self.emit_state(EngineState::Inserting);
-                                            if let Err(e) = TextInjector::inject(text) {
-                                                self.emit_state(EngineState::Error(
-                                                    format!("Text injection failed: {}", e),
-                                                ));
+                                            let [cleaning_state, inserting_state] =
+                                                Self::successful_text_states();
+                                            self.emit_state(cleaning_state);
+                                            let cleaned_text = self.clean_safely(text);
+
+                                            self.emit_state(inserting_state);
+                                            if let Err(e) = TextInjector::inject(cleaned_text) {
+                                                self.emit_state(EngineState::Error(format!(
+                                                    "Text injection failed: {}",
+                                                    e
+                                                )));
                                                 thread::sleep(Duration::from_secs(2));
                                             }
                                         }
                                         Err(e) => {
-                                            self.emit_state(EngineState::Error(
-                                                format!("Transcription failed: {}", e),
-                                            ));
+                                            self.emit_state(EngineState::Error(format!(
+                                                "Transcription failed: {}",
+                                                e
+                                            )));
                                             thread::sleep(Duration::from_secs(2));
                                         }
                                     }
@@ -130,5 +181,18 @@ impl CoreEngine {
             }
             thread::sleep(Duration::from_millis(10));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CoreEngine, EngineState};
+
+    #[test]
+    fn successful_text_flow_emits_cleaning_before_inserting() {
+        assert_eq!(
+            CoreEngine::successful_text_states(),
+            [EngineState::Cleaning, EngineState::Inserting]
+        );
     }
 }

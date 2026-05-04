@@ -103,6 +103,7 @@ version = "0.1.0"
 dependencies = [
  "clipboard-win",
  "cpal",
+ "encoding_rs",
  "global-hotkey",
  "llama-cpp-2",
  "log",

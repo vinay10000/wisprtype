@@ -200,7 +200,21 @@ impl RefinementEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::RefinementEngine;
+    use super::{RefinementEngine, MODEL_NAME};
+
+    #[test]
+    fn qwen_refinement_model_is_the_configured_default() {
+        assert!(MODEL_NAME.contains("qwen2.5"));
+    }
+
+    #[test]
+    fn prompt_locks_cleanup_to_transcript_refinement() {
+        let prompt = RefinementEngine::build_prompt("um this is a test");
+        assert!(prompt.contains("Remove filler words"));
+        assert!(prompt.contains("Add punctuation and capitalization"));
+        assert!(prompt.contains("Preserve wording and meaning"));
+        assert!(prompt.contains("Output only the cleaned transcript"));
+    }
 
     #[test]
     fn empty_transcript_is_skipped_before_inference() {

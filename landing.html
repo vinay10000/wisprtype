@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wispr Type | Dictation for Windows</title>
+    <!-- We use characterful fonts: Sora for headers (modern, geometric) and Segoe UI Variable for body (Windows-native) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --mica: rgba(26, 26, 32, 0.7);
+            --acrylic: rgba(32, 32, 36, 0.4);
+            --accent-primary: #ff479c;
+            --accent-secondary: #7e4dff;
+            --accent-tertiary: #00d2ff;
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.6);
+            --border-light: rgba(255, 255, 255, 0.1);
+            --border-extra-light: rgba(255, 255, 255, 0.05);
+            --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            cursor: none; /* We'll implement a custom fluid cursor */
+        }
+
+        body {
+            background-color: #050505;
+            color: var(--text-primary);
+            font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+            selection-background-color: var(--accent-primary);
+        }
+
+        h1, h2, h3 {
+            font-family: 'Sora', sans-serif;
+            letter-spacing: -0.03em;
+        }
+
+        /* --- Noise & Grain Texture --- */
+        .noise {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+            opacity: 0.04;
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        /* --- Custom Fluid Cursor --- */
+        #cursor {
+            position: fixed;
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 10000;
+            mix-blend-mode: difference;
+            transition: transform 0.15s var(--ease-out-expo), width 0.3s, height 0.3s;
+        }
+
+        /* --- Background Atmosphere --- */
+        .atmosphere {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1;
+            overflow: hidden;
+        }
+
+        .gradient-orb {
+            position: absolute;
+            width: 80vw;
+            height: 80vw;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.15;
+            mix-blend-mode: screen;
+            animation: drift 30s infinite alternate var(--ease-out-expo);
+        }
+
+        .orb-1 { background: var(--accent-primary); top: -20%; right: -10%; }
+        .orb-2 { background: var(--accent-secondary); bottom: -10%; left: -10%; animation-delay: -5s; }
+        .orb-3 { background: var(--accent-tertiary); top: 30%; left: 10%; width: 40vw; height: 40vw; opacity: 0.1; animation-delay: -10s; }
+
+        @keyframes drift {
+            from { transform: translate(0, 0) rotate(0deg) scale(1); }
+            to { transform: translate(100px, 50px) rotate(10deg) scale(1.1); }
+        }
+
+        /* --- Layout --- */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 4rem;
+        }
+
+        nav {
+            position: fixed;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            width: auto;
+            padding: 0.75rem 1.5rem;
+            background: var(--mica);
+            backdrop-filter: blur(40px) saturate(150%);
+            border: 1px solid var(--border-light);
+            border-radius: 2rem;
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            animation: slideDown 1s var(--ease-out-expo);
+        }
+
+        @keyframes slideDown {
+            from { transform: translate(-50%, -100px); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
+        }
+
+        .nav-link {
+            text-decoration: none;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+
+        .nav-link:hover { color: #fff; }
+
+        /* --- Hero Section --- */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding-top: 8rem;
+            position: relative;
+        }
+
+        .hero-title {
+            font-size: 8rem;
+            font-weight: 800;
+            line-height: 0.85;
+            margin-bottom: 2rem;
+            text-transform: uppercase;
+            overflow: hidden;
+        }
+
+        .hero-title span {
+            display: block;
+            background: linear-gradient(180deg, #fff 0%, rgba(255,255,255,0.4) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: revealUp 1.2s var(--ease-out-expo) both;
+        }
+
+        @keyframes revealUp {
+            from { transform: translateY(110%); }
+            to { transform: translateY(0); }
+        }
+
+        .hero-sub {
+            max-width: 600px;
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            margin-bottom: 3rem;
+            animation: fadeIn 1s 0.8s var(--ease-out-expo) both;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- CTA --- */
+        .cta-button {
+            display: inline-flex;
+            align-items: center;
+            padding: 1rem 2.5rem;
+            background: #fff;
+            color: #000;
+            text-decoration: none;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            font-size: 1.1rem;
+            gap: 1rem;
+            transition: all 0.3s var(--ease-out-expo);
+            width: fit-content;
+            animation: fadeIn 1s 1s var(--ease-out-expo) both;
+        }
+
+        .cta-button:hover {
+            transform: scale(1.05);
+            background: var(--accent-primary);
+            color: #fff;
+            box-shadow: 0 0 50px rgba(255, 71, 156, 0.4);
+        }
+
+        /* --- OS Mockup (The "Window") --- */
+        .window-frame {
+            margin-top: 4rem;
+            width: 100%;
+            aspect-ratio: 16/10;
+            background: var(--mica);
+            border: 1px solid var(--border-light);
+            border-radius: 1rem;
+            padding: 1px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 100px 200px rgba(0,0,0,0.6);
+            animation: windowReveal 1.5s 0.5s var(--ease-out-expo) both;
+        }
+
+        @keyframes windowReveal {
+            from { transform: perspective(1000px) rotateX(10deg) translateY(100px); opacity: 0; }
+            to { transform: perspective(1000px) rotateX(0) translateY(0); opacity: 1; }
+        }
+
+        .window-content {
+            background: rgba(10, 10, 12, 0.6);
+            width: 100%;
+            height: 100%;
+            border-radius: calc(1rem - 1px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(255, 71, 156, 0.05) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(0, 210, 255, 0.05) 0px, transparent 50%);
+        }
+
+        .pill-container {
+            width: 400px;
+            padding: 1.5rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-extra-light);
+            border-radius: 4rem;
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 20px 80px rgba(0,0,0,0.5);
+        }
+
+        .status-dot {
+            width: 12px; height: 12px;
+            background: var(--accent-primary);
+            border-radius: 50%;
+            box-shadow: 0 0 15px var(--accent-primary);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.4); opacity: 0.5; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .waveform {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-grow: 1;
+            height: 30px;
+        }
+
+        .bar {
+            width: 3px;
+            height: 4px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            animation: wave 1s ease-in-out infinite alternate;
+        }
+
+        @keyframes wave {
+            from { height: 4px; background: rgba(255,255,255,0.2); }
+            to { height: 24px; background: #fff; }
+        }
+
+        /* --- Feature Grid --- */
+        .features {
+            padding: 10rem 0;
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 2rem;
+        }
+
+        .feature-box {
+            grid-column: span 4;
+            padding: 3rem;
+            background: var(--acrylic);
+            border: 1px solid var(--border-extra-light);
+            border-radius: 2rem;
+            transition: all 0.4s var(--ease-out-expo);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-box::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, transparent, rgba(255,255,255,0.05), transparent);
+            transform: translateX(-100%);
+            transition: transform 0.6s var(--ease-out-expo);
+        }
+
+        .feature-box:hover {
+            transform: translateY(-10px);
+            border-color: var(--border-light);
+            background: rgba(255,255,255,0.05);
+        }
+
+        .feature-box:hover::before {
+            transform: translateX(100%);
+        }
+
+        .feature-box h3 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+
+        .feature-box p {
+            color: var(--text-secondary);
+            line-height: 1.6;
+            font-size: 1.1rem;
+        }
+
+        /* --- Footer --- */
+        footer {
+            padding: 8rem 0 4rem;
+            border-top: 1px solid var(--border-extra-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo-text {
+            font-family: 'Sora', sans-serif;
+            font-weight: 800;
+            font-size: 1.5rem;
+            letter-spacing: -1px;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+    </style>
+</head>
+<body>
+
+    <div id="cursor"></div>
+    <div class="noise"></div>
+
+    <div class="atmosphere">
+        <div class="gradient-orb orb-1"></div>
+        <div class="gradient-orb orb-2"></div>
+        <div class="gradient-orb orb-3"></div>
+    </div>
+
+    <nav>
+        <a href="#" class="logo-text" style="font-size: 1rem; margin-right: 1rem;">WISPR</a>
+        <a href="#features" class="nav-link">Capabilities</a>
+        <a href="#privacy" class="nav-link">Integrity</a>
+        <a href="#download" class="nav-link">Get Preview</a>
+    </nav>
+
+    <main class="container">
+        <section class="hero">
+            <h1 class="hero-title">
+                <span>The Voice</span>
+                <span style="animation-delay: 0.1s">Of Modern</span>
+                <span style="animation-delay: 0.2s">Windows.</span>
+            </h1>
+            <p class="hero-sub">
+                Native on-device AI. Zero cloud latency. Fluid integration. 
+                Experience the next generation of professional dictation, re-engineered for the Windows ecosystem.
+            </p>
+            <a href="#" class="cta-button">
+                Download for Windows 11
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+            </a>
+
+            <div class="window-frame">
+                <div class="window-content">
+                    <div class="pill-container">
+                        <div class="status-dot"></div>
+                        <div class="waveform">
+                            <div class="bar" style="animation-delay: 0.1s; height: 12px;"></div>
+                            <div class="bar" style="animation-delay: 0.3s; height: 18px;"></div>
+                            <div class="bar" style="animation-delay: 0.5s; height: 10px;"></div>
+                            <div class="bar" style="animation-delay: 0.2s; height: 22px;"></div>
+                            <div class="bar" style="animation-delay: 0.7s; height: 14px;"></div>
+                            <div class="bar" style="animation-delay: 0.4s; height: 20px;"></div>
+                            <div class="bar" style="animation-delay: 0.6s; height: 12px;"></div>
+                            <div class="bar" style="animation-delay: 0.1s; height: 16px;"></div>
+                        </div>
+                        <div style="font-weight: 600; font-size: 0.9rem; opacity: 0.9;">Ready to listen...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="features" class="features">
+            <div class="feature-box" style="grid-column: span 7;">
+                <h3>C++ Engine</h3>
+                <p>Optimized for Windows performance. We don't use electron or wrappers. This is native code talking directly to your silicon for instantaneous response times.</p>
+            </div>
+            <div class="feature-box" style="grid-column: span 5;">
+                <h3>Private By Default</h3>
+                <p>Your audio never leaves your machine. Whisper models run entirely on-device, ensuring corporate compliance and personal peace of mind.</p>
+            </div>
+            <div class="feature-box" style="grid-column: span 5;">
+                <h3>Context Aware</h3>
+                <p>Wispr understands when you're in VS Code vs Outlook, adjusting its vocabulary and formatting to match your specific task.</p>
+            </div>
+            <div class="feature-box" style="grid-column: span 7;">
+                <h3>Universal Shortcut</h3>
+                <p>A simple Win+Space brings Wispr to life anywhere. It’s not just an app; it’s an extension of your operating system.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer class="container">
+        <div class="logo-text">WISPR TYPE</div>
+        <div style="display: flex; gap: 2rem;">
+            <a href="#" class="nav-link">Changelog</a>
+            <a href="#" class="nav-link">Documentation</a>
+            <a href="#" class="nav-link">Privacy Policy</a>
+        </div>
+        <div class="text-secondary" style="font-size: 0.8rem;">&copy; 2024 Wispr. Designed for Windows.</div>
+    </footer>
+
+    <script>
+        // Fluid Cursor Implementation
+        const cursor = document.getElementById('cursor');
+        document.addEventListener('mousemove', (e) => {
+            cursor.style.left = e.clientX + 'px';
+            cursor.style.top = e.clientY + 'px';
+        });
+
+        // Hover expansions for cursor
+        document.querySelectorAll('a, .feature-box').forEach(el => {
+            el.addEventListener('mouseenter', () => {
+                cursor.style.width = '80px';
+                cursor.style.height = '80px';
+                cursor.style.transform = 'translate(-50%, -50%)';
+            });
+            el.addEventListener('mouseleave', () => {
+                cursor.style.width = '20px';
+                cursor.style.height = '20px';
+                cursor.style.transform = 'translate(0, 0)';
+            });
+        });
+
+        // Parallax Effect for atmosphere
+        document.addEventListener('mousemove', (e) => {
+            const x = e.clientX / window.innerWidth;
+            const y = e.clientY / window.innerHeight;
+            document.querySelector('.orb-1').style.transform = `translate(${x * 50}px, ${y * 50}px)`;
+            document.querySelector('.orb-2').style.transform = `translate(${x * -30}px, ${y * -30}px)`;
+        });
+    </script>
+</body>
+</html>

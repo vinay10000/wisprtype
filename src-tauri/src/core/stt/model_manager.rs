@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::core::stt::SttError;
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+const DOWNLOAD_BUFFER_SIZE: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelSize {
@@ -106,7 +107,7 @@ impl ModelManager {
         let mut file = fs::File::create(dest)
             .map_err(|e| SttError::ModelDownload(e.to_string()))?;
 
-        let mut buf = [0u8; 65536];
+        let mut buf = [0u8; DOWNLOAD_BUFFER_SIZE];
         loop {
             let n = response.read(&mut buf)
                 .map_err(|e| SttError::ModelDownload(e.to_string()))?;
@@ -146,6 +147,6 @@ impl ModelManager {
         };
         self.settings_store
             .persist(&settings)
-            .map_err(|e| SttError::ModelDownload(e))
+            .map_err(|e| SttError::SettingsPersist(e))
     }
 }

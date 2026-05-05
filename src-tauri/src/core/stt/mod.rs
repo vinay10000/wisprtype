@@ -18,6 +18,7 @@ pub enum SttError {
     BackendNotInitialized(&'static str),
     NoBackendAvailable { attempts: Vec<String> },
     Inference { backend: &'static str, message: String },
+    SettingsPersist(String),
 }
 
 impl Display for SttError {
@@ -40,6 +41,7 @@ impl Display for SttError {
             Self::Inference { backend, message } => {
                 write!(f, "{} backend inference failed: {}", backend, message)
             }
+            Self::SettingsPersist(m) => write!(f, "Failed to persist settings: {}", m),
         }
     }
 }

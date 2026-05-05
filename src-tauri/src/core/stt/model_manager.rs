@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
+
+use crate::core::stt::SttError;
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,20 +42,27 @@ use crate::core::settings::{AppSettings, SettingsStore};
 
 pub struct ModelManager {
     model_dir: PathBuf,
+    settings_store: SettingsStore,
     selected_size: ModelSize,
+}
+
+fn resolve_app_data_dir() -> Result<PathBuf, String> {
+    let app_data = std::env::var("APPDATA")
+        .map_err(|e| format!("Failed to resolve APPDATA directory: {}", e))?;
+    Ok(PathBuf::from(app_data).join("WisprWin"))
 }
 
 impl ModelManager {
     pub fn new() -> Result<Self, String> {
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("Failed to resolve app directory: {}", e))?;
-        let settings_store = SettingsStore::new(&cwd);
+        let app_dir = resolve_app_data_dir()?;
+        let settings_store = SettingsStore::new(&app_dir);
         let settings = settings_store.load()?;
-        let model_dir = cwd.join("models");
+        let model_dir = app_dir.join("models");
         fs::create_dir_all(&model_dir).map_err(|e| e.to_string())?;
 
         Ok(Self {
             model_dir,
+            settings_store,
             selected_size: settings.stt_model_size,
         })
     }
@@ -62,47 +71,81 @@ impl ModelManager {
         self.model_dir.join(self.selected_size.filename())
     }
 
-    pub fn ensure_model_downloaded(&self) -> Result<PathBuf, String> {
+    pub fn ensure_model_downloaded(&self) -> Result<PathBuf, SttError> {
         let model_path = self.active_model_path();
         if model_path.exists() {
             return Ok(model_path);
         }
 
         let model_name = self.selected_size.filename();
-        println!(
+        eprintln!(
             "Downloading Whisper model ({})... this may take a minute.",
             model_name
         );
 
-        let response = reqwest::blocking::get(self.selected_size.download_url())
-            .and_then(|response| response.error_for_status())
-            .map_err(|e| e.to_string())?;
+        let tmp_path = model_path.with_extension("tmp");
+        let download_result = self.stream_download_model(&tmp_path);
 
-        let mut file = fs::File::create(&model_path).map_err(|e| e.to_string())?;
-        let bytes = response.bytes().map_err(|e| e.to_string())?;
-        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        if let Err(e) = download_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(e);
+        }
 
-        println!("Download complete.");
+        fs::rename(&tmp_path, &model_path)
+            .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+
+        eprintln!("Download complete.");
         Ok(model_path)
     }
 
-    pub fn swap_model(&mut self, size: ModelSize) -> Result<PathBuf, String> {
+    fn stream_download_model(&self, dest: &PathBuf) -> Result<(), SttError> {
+        let mut response = reqwest::blocking::get(self.selected_size.download_url())
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+
+        let mut file = fs::File::create(dest)
+            .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+
+        let mut buf = [0u8; 65536];
+        loop {
+            let n = response.read(&mut buf)
+                .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            file.write_all(&buf[..n])
+                .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+        }
+
+        file.flush().map_err(|e| SttError::ModelDownload(e.to_string()))
+    }
+
+    pub fn swap_model(&mut self, size: ModelSize) -> Result<PathBuf, SttError> {
         if self.selected_size == size {
             return self.ensure_model_downloaded();
         }
 
+        let previous_size = self.selected_size;
         self.selected_size = size;
-        self.persist_settings()?;
-        self.ensure_model_downloaded()
+
+        match self.ensure_model_downloaded() {
+            Ok(path) => {
+                self.persist_settings()?;
+                Ok(path)
+            }
+            Err(e) => {
+                self.selected_size = previous_size;
+                Err(e)
+            }
+        }
     }
 
-    fn persist_settings(&self) -> Result<(), String> {
-        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        let settings_store = SettingsStore::new(&cwd);
+    fn persist_settings(&self) -> Result<(), SttError> {
         let settings = AppSettings {
             stt_model_size: self.selected_size,
         };
-
-        settings_store.persist(&settings)
+        self.settings_store
+            .persist(&settings)
+            .map_err(|e| SttError::ModelDownload(e))
     }
 }

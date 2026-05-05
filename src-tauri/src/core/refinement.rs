@@ -1,3 +1,4 @@
+use crate::core::model_paths::{ensure_model_root_dir, map_fs_error};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -55,12 +56,7 @@ impl RefinementEngine {
     }
 
     fn ensure_model_downloaded() -> Result<PathBuf, String> {
-        let model_dir = std::env::current_dir()
-            .map_err(|e| format!("Failed to resolve model directory: {}", e))?
-            .join("models");
-
-        fs::create_dir_all(&model_dir)
-            .map_err(|e| format!("Failed to create refinement model directory: {}", e))?;
+        let model_dir = ensure_model_root_dir()?;
 
         let model_path = model_dir.join(MODEL_NAME);
         if model_path.exists() {
@@ -82,11 +78,11 @@ impl RefinementEngine {
                 .map_err(|e| format!("Failed to read refinement model download: {}", e))?;
 
             let mut file = fs::File::create(&tmp_path)
-                .map_err(|e| format!("Failed to create refinement model file: {}", e))?;
+                .map_err(|e| map_fs_error("create refinement model file", &tmp_path, &e))?;
             file.write_all(&bytes)
-                .map_err(|e| format!("Failed to write refinement model file: {}", e))?;
+                .map_err(|e| map_fs_error("write refinement model file", &tmp_path, &e))?;
             fs::rename(&tmp_path, &model_path)
-                .map_err(|e| format!("Failed to finalize refinement model file: {}", e))?;
+                .map_err(|e| map_fs_error("finalize refinement model file", &model_path, &e))?;
             Ok(())
         })();
 

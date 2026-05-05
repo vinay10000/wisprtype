@@ -1,5 +1,5 @@
 use crate::core::refinement::RefinementEngine;
-use crate::core::stt::BasicTranscriber;
+use crate::core::stt::{BasicTranscriber, ModelSize};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{BufRead, BufReader, Write};
@@ -36,6 +36,7 @@ impl WorkerKind {
 enum WorkerRequest {
     Transcribe(Vec<f32>),
     Refine(String),
+    SwapModel(ModelSize),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,6 +90,10 @@ impl NativeWorker {
 
     pub fn refine(&mut self, raw_text: String) -> Result<String, String> {
         self.request(WorkerRequest::Refine(raw_text))
+    }
+
+    pub fn swap_model(&mut self, size: ModelSize) -> Result<String, String> {
+        self.request(WorkerRequest::SwapModel(size))
     }
 
     fn request(&mut self, request: WorkerRequest) -> Result<String, String> {
@@ -244,7 +249,7 @@ pub fn run_if_requested() -> bool {
 }
 
 fn run_stt_worker() -> i32 {
-    let transcriber = match BasicTranscriber::new() {
+    let mut transcriber = match BasicTranscriber::new() {
         Ok(transcriber) => transcriber,
         Err(e) => {
             eprintln!("Failed to initialize STT worker: {}", e);
@@ -254,6 +259,7 @@ fn run_stt_worker() -> i32 {
 
     serve_worker(|request| match request {
         WorkerRequest::Transcribe(audio) => transcriber.transcribe(&audio),
+        WorkerRequest::SwapModel(size) => transcriber.swap_model(size).map(|_| "ok".to_string()),
         WorkerRequest::Refine(_) => Err("STT worker received a refinement request".to_string()),
     })
 }
@@ -269,6 +275,9 @@ fn run_refinement_worker() -> i32 {
 
     serve_worker(|request| match request {
         WorkerRequest::Refine(text) => Ok(refinement.clean(text)),
+        WorkerRequest::SwapModel(_) => {
+            Err("Refinement worker received a model swap request".to_string())
+        }
         WorkerRequest::Transcribe(_) => {
             Err("Refinement worker received a transcription request".to_string())
         }

@@ -1,14 +1,20 @@
 use reqwest::blocking::{multipart, Client, Response};
 use reqwest::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
+
+use crate::core::settings::CloudProvider as SettingsCloudProvider;
 
 const SAMPLE_RATE: u32 = 16_000;
 const REQUEST_TIMEOUT_SECS: u64 = 25;
+const GLADIA_POLL_INTERVAL_MS: u64 = 750;
+const GLADIA_MAX_WAIT_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudProviderKind {
+    Gladia,
     OpenAi,
     Groq,
     Deepgram,
@@ -16,19 +22,30 @@ pub enum CloudProviderKind {
 
 impl CloudProviderKind {
     pub fn from_env() -> Self {
-        Self::parse(&env::var("WISPRTYPE_CLOUD_PROVIDER").unwrap_or_else(|_| "openai".to_string()))
+        Self::parse(&env::var("WISPRFLOW_CLOUD_PROVIDER").unwrap_or_else(|_| "gladia".to_string()))
     }
 
     pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
+            "gladia" => Self::Gladia,
             "groq" => Self::Groq,
             "deepgram" => Self::Deepgram,
             _ => Self::OpenAi,
         }
     }
 
+    pub fn from_settings(provider: SettingsCloudProvider) -> Self {
+        match provider {
+            SettingsCloudProvider::Gladia => Self::Gladia,
+            SettingsCloudProvider::OpenAi => Self::OpenAi,
+            SettingsCloudProvider::Groq => Self::Groq,
+            SettingsCloudProvider::Deepgram => Self::Deepgram,
+        }
+    }
+
     fn credential_name(self) -> &'static str {
         match self {
+            Self::Gladia => "gladia",
             Self::OpenAi => "openai",
             Self::Groq => "groq",
             Self::Deepgram => "deepgram",
@@ -37,6 +54,7 @@ impl CloudProviderKind {
 
     fn env_key(self) -> &'static str {
         match self {
+            Self::Gladia => "GLADIA_API_KEY",
             Self::OpenAi => "OPENAI_API_KEY",
             Self::Groq => "GROQ_API_KEY",
             Self::Deepgram => "DEEPGRAM_API_KEY",
@@ -45,7 +63,7 @@ impl CloudProviderKind {
 }
 
 pub trait CloudProvider {
-    fn transcribe(&self, wav: Vec<u8>) -> Result<String, String>;
+    fn transcribe(&self, wav: Vec<u8>, initial_prompt: Option<&str>) -> Result<String, String>;
 }
 
 pub struct CloudTranscriber {
@@ -63,6 +81,7 @@ impl CloudTranscriber {
             .map_err(|e| format!("Failed to create cloud STT client: {}", e))?;
 
         let provider: Box<dyn CloudProvider + Send + Sync> = match kind {
+            CloudProviderKind::Gladia => Box::new(GladiaProvider { client, api_key }),
             CloudProviderKind::OpenAi => Box::new(OpenAiProvider { client, api_key }),
             CloudProviderKind::Groq => Box::new(GroqProvider { client, api_key }),
             CloudProviderKind::Deepgram => Box::new(DeepgramProvider { client, api_key }),
@@ -71,9 +90,13 @@ impl CloudTranscriber {
         Ok(Self { provider })
     }
 
-    pub fn transcribe(&self, audio_data: &[f32]) -> Result<String, String> {
+    pub fn transcribe(
+        &self,
+        audio_data: &[f32],
+        initial_prompt: Option<&str>,
+    ) -> Result<String, String> {
         self.provider
-            .transcribe(encode_wav(audio_data, SAMPLE_RATE))
+            .transcribe(encode_wav(audio_data, SAMPLE_RATE), initial_prompt)
     }
 }
 
@@ -97,7 +120,208 @@ impl CloudCredentials {
 }
 
 fn credential_target(kind: CloudProviderKind) -> String {
-    format!("WisprType/cloud/{}", kind.credential_name())
+    format!("wisprflow/cloud/{}", kind.credential_name())
+}
+
+struct GladiaProvider {
+    client: Client,
+    api_key: String,
+}
+
+impl CloudProvider for GladiaProvider {
+    fn transcribe(&self, wav: Vec<u8>, initial_prompt: Option<&str>) -> Result<String, String> {
+        let audio_url = self.upload_audio(wav)?;
+        let job = self.start_transcription(audio_url, initial_prompt)?;
+        self.poll_transcription(&job.id)
+    }
+}
+
+impl GladiaProvider {
+    fn upload_audio(&self, wav: Vec<u8>) -> Result<String, String> {
+        let form = multipart::Form::new().part("audio", wav_part(wav)?);
+        let response = self
+            .client
+            .post("https://api.gladia.io/v2/upload")
+            .header("x-gladia-key", &self.api_key)
+            .multipart(form)
+            .send()
+            .map_err(|e| classify_transport_error("Gladia", e))?;
+
+        let status = response.status();
+        let payload: GladiaUploadResponse = response
+            .json()
+            .map_err(|e| format!("Gladia returned an unreadable upload response: {}", e))?;
+
+        if !status.is_success() {
+            return Err(classify_status("Gladia", status, payload.error_message()));
+        }
+
+        payload
+            .audio_url
+            .filter(|url| !url.trim().is_empty())
+            .ok_or_else(|| "Gladia upload returned no audio URL".to_string())
+    }
+
+    fn start_transcription(
+        &self,
+        audio_url: String,
+        initial_prompt: Option<&str>,
+    ) -> Result<GladiaJobResponse, String> {
+        let custom_vocabulary = initial_prompt
+            .map(extract_prompt_terms)
+            .filter(|terms| !terms.is_empty());
+        let body = GladiaTranscriptionRequest {
+            audio_url,
+            custom_vocabulary,
+            punctuation_enhanced: true,
+            language_config: GladiaLanguageConfig {
+                languages: vec!["en".to_string()],
+                code_switching: false,
+            },
+        };
+
+        let response = self
+            .client
+            .post("https://api.gladia.io/v2/pre-recorded")
+            .header("x-gladia-key", &self.api_key)
+            .json(&body)
+            .send()
+            .map_err(|e| classify_transport_error("Gladia", e))?;
+
+        let status = response.status();
+        let payload: GladiaJobResponse = response
+            .json()
+            .map_err(|e| format!("Gladia returned an unreadable job response: {}", e))?;
+
+        if !status.is_success() {
+            return Err(classify_status("Gladia", status, payload.error_message()));
+        }
+
+        Ok(payload)
+    }
+
+    fn poll_transcription(&self, id: &str) -> Result<String, String> {
+        let deadline = Instant::now() + Duration::from_secs(GLADIA_MAX_WAIT_SECS);
+
+        loop {
+            let response = self
+                .client
+                .get(format!("https://api.gladia.io/v2/pre-recorded/{id}"))
+                .header("x-gladia-key", &self.api_key)
+                .send()
+                .map_err(|e| classify_transport_error("Gladia", e))?;
+
+            let status = response.status();
+            let payload: GladiaResultResponse = response
+                .json()
+                .map_err(|e| format!("Gladia returned an unreadable result response: {}", e))?;
+
+            if !status.is_success() {
+                return Err(classify_status("Gladia", status, payload.error_message()));
+            }
+
+            match payload.status.as_deref() {
+                Some("done") => {
+                    return payload
+                        .result
+                        .and_then(|result| result.transcription)
+                        .and_then(|transcription| transcription.full_transcript)
+                        .filter(|text| !text.trim().is_empty())
+                        .ok_or_else(|| "Gladia returned an empty transcript".to_string())
+                }
+                Some("error") => {
+                    return Err(format!(
+                        "Gladia transcription failed: {}",
+                        payload.error_message()
+                    ))
+                }
+                _ if Instant::now() >= deadline => {
+                    return Err("Gladia transcription timed out".to_string())
+                }
+                _ => thread::sleep(Duration::from_millis(GLADIA_POLL_INTERVAL_MS)),
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GladiaUploadResponse {
+    audio_url: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+impl GladiaUploadResponse {
+    fn error_message(&self) -> String {
+        self.message
+            .clone()
+            .or_else(|| self.error.clone())
+            .unwrap_or_else(|| "HTTP error".to_string())
+    }
+}
+
+#[derive(Serialize)]
+struct GladiaTranscriptionRequest {
+    audio_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    custom_vocabulary: Option<Vec<String>>,
+    punctuation_enhanced: bool,
+    language_config: GladiaLanguageConfig,
+}
+
+#[derive(Serialize)]
+struct GladiaLanguageConfig {
+    languages: Vec<String>,
+    code_switching: bool,
+}
+
+#[derive(Deserialize)]
+struct GladiaJobResponse {
+    id: String,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+impl GladiaJobResponse {
+    fn error_message(&self) -> String {
+        self.message
+            .clone()
+            .or_else(|| self.error.clone())
+            .unwrap_or_else(|| "HTTP error".to_string())
+    }
+}
+
+#[derive(Deserialize)]
+struct GladiaResultResponse {
+    status: Option<String>,
+    result: Option<GladiaResult>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+impl GladiaResultResponse {
+    fn error_message(&self) -> String {
+        self.message
+            .clone()
+            .or_else(|| self.error.clone())
+            .unwrap_or_else(|| "HTTP error".to_string())
+    }
+}
+
+#[derive(Deserialize)]
+struct GladiaResult {
+    transcription: Option<GladiaTranscription>,
+}
+
+#[derive(Deserialize)]
+struct GladiaTranscription {
+    full_transcript: Option<String>,
 }
 
 struct OpenAiProvider {
@@ -106,11 +330,14 @@ struct OpenAiProvider {
 }
 
 impl CloudProvider for OpenAiProvider {
-    fn transcribe(&self, wav: Vec<u8>) -> Result<String, String> {
+    fn transcribe(&self, wav: Vec<u8>, initial_prompt: Option<&str>) -> Result<String, String> {
         let part = wav_part(wav)?;
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .text("model", "whisper-1")
             .part("file", part);
+        if let Some(prompt) = initial_prompt {
+            form = form.text("prompt", prompt.to_string());
+        }
         let response = self
             .client
             .post("https://api.openai.com/v1/audio/transcriptions")
@@ -128,11 +355,14 @@ struct GroqProvider {
 }
 
 impl CloudProvider for GroqProvider {
-    fn transcribe(&self, wav: Vec<u8>) -> Result<String, String> {
+    fn transcribe(&self, wav: Vec<u8>, initial_prompt: Option<&str>) -> Result<String, String> {
         let part = wav_part(wav)?;
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .text("model", "whisper-large-v3-turbo")
             .part("file", part);
+        if let Some(prompt) = initial_prompt {
+            form = form.text("prompt", prompt.to_string());
+        }
         let response = self
             .client
             .post("https://api.groq.com/openai/v1/audio/transcriptions")
@@ -150,10 +380,23 @@ struct DeepgramProvider {
 }
 
 impl CloudProvider for DeepgramProvider {
-    fn transcribe(&self, wav: Vec<u8>) -> Result<String, String> {
+    fn transcribe(&self, wav: Vec<u8>, initial_prompt: Option<&str>) -> Result<String, String> {
+        let url = match initial_prompt {
+            Some(prompt) => format!(
+                "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&keywords={}",
+                prompt
+                    .split(':')
+                    .last()
+                    .unwrap_or(prompt)
+                    .replace('.', "")
+                    .replace(", ", "&keywords=")
+                    .replace(' ', "%20")
+            ),
+            None => "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true".to_string(),
+        };
         let response = self
             .client
-            .post("https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")
+            .post(url)
             .bearer_auth(&self.api_key)
             .header("Content-Type", "audio/wav")
             .body(wav)
@@ -273,6 +516,19 @@ fn wav_part(wav: Vec<u8>) -> Result<multipart::Part, String> {
         .map_err(|e| format!("Failed to prepare audio upload: {}", e))
 }
 
+fn extract_prompt_terms(prompt: &str) -> Vec<String> {
+    prompt
+        .split(':')
+        .last()
+        .unwrap_or(prompt)
+        .trim_end_matches('.')
+        .split(',')
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn encode_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     let data_bytes = samples.len() as u32 * 2;
     let mut wav = Vec::with_capacity(44 + data_bytes as usize);
@@ -348,7 +604,7 @@ mod credential_manager {
 
     pub fn write_secret(target: &str, secret: &str) -> Result<(), String> {
         let target = wide_null(target);
-        let username = wide_null("WisprType");
+        let username = wide_null("wisprflow");
         let mut blob = secret.as_bytes().to_vec();
 
         let credential = CREDENTIALW {
@@ -410,6 +666,10 @@ mod tests {
 
     #[test]
     fn parses_cloud_provider_names() {
+        assert_eq!(
+            CloudProviderKind::parse("gladia"),
+            CloudProviderKind::Gladia
+        );
         assert_eq!(CloudProviderKind::parse("groq"), CloudProviderKind::Groq);
         assert_eq!(
             CloudProviderKind::parse("deepgram"),

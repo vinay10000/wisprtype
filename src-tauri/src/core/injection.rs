@@ -1,12 +1,21 @@
+use clipboard_win::{raw, Clipboard};
 use std::thread;
 use std::time::Duration;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_CONTROL, VK_V
+    SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_CONTROL,
+    VK_V,
 };
-use clipboard_win::{raw, Clipboard};
+
+const PASTE_THRESHOLD_CHARS: usize = 100;
 
 struct ClipboardSnapshot {
     formats: Vec<(u32, Vec<u8>)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InjectionMode {
+    Typing,
+    ClipboardPaste,
 }
 
 pub struct TextInjector;
@@ -17,16 +26,46 @@ impl TextInjector {
             return Ok(());
         }
 
-        if text.chars().count() < 100 {
-            Self::simulate_typing(&text)
+        let preferred = Self::preferred_mode(&text);
+        match Self::inject_with_mode(&text, preferred) {
+            Ok(()) => Ok(()),
+            Err(primary_error) => {
+                let fallback = Self::fallback_mode(preferred);
+                Self::inject_with_mode(&text, fallback).map_err(|fallback_error| {
+                    format!(
+                        "Primary {:?} injection failed: {}; fallback {:?} injection failed: {}",
+                        preferred, primary_error, fallback, fallback_error
+                    )
+                })
+            }
+        }
+    }
+
+    fn preferred_mode(text: &str) -> InjectionMode {
+        if text.chars().count() < PASTE_THRESHOLD_CHARS {
+            InjectionMode::Typing
         } else {
-            Self::paste_text(&text)
+            InjectionMode::ClipboardPaste
+        }
+    }
+
+    fn fallback_mode(mode: InjectionMode) -> InjectionMode {
+        match mode {
+            InjectionMode::Typing => InjectionMode::ClipboardPaste,
+            InjectionMode::ClipboardPaste => InjectionMode::Typing,
+        }
+    }
+
+    fn inject_with_mode(text: &str, mode: InjectionMode) -> Result<(), String> {
+        match mode {
+            InjectionMode::Typing => Self::simulate_typing(text),
+            InjectionMode::ClipboardPaste => Self::paste_text(text),
         }
     }
 
     fn simulate_typing(text: &str) -> Result<(), String> {
         let mut inputs: Vec<INPUT> = Vec::new();
-        
+
         for c in text.encode_utf16() {
             // Key down
             let mut down = INPUT {
@@ -60,7 +99,11 @@ impl TextInjector {
         unsafe {
             let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
             if sent != inputs.len() as u32 {
-                return Err(format!("SendInput sent {} of {} inputs", sent, inputs.len()));
+                return Err(format!(
+                    "SendInput sent {} of {} inputs",
+                    sent,
+                    inputs.len()
+                ));
             }
         }
 
@@ -77,9 +120,12 @@ impl TextInjector {
         }
 
         let mut inputs: Vec<INPUT> = Vec::new();
-        
+
         // Ctrl down
-        let mut ctrl_down = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
+        let mut ctrl_down = INPUT {
+            r#type: INPUT_KEYBOARD,
+            ..Default::default()
+        };
         ctrl_down.Anonymous.ki = KEYBDINPUT {
             wVk: VK_CONTROL,
             wScan: 0,
@@ -90,7 +136,10 @@ impl TextInjector {
         inputs.push(ctrl_down);
 
         // V down
-        let mut v_down = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
+        let mut v_down = INPUT {
+            r#type: INPUT_KEYBOARD,
+            ..Default::default()
+        };
         v_down.Anonymous.ki = KEYBDINPUT {
             wVk: VK_V,
             wScan: 0,
@@ -101,7 +150,10 @@ impl TextInjector {
         inputs.push(v_down);
 
         // V up
-        let mut v_up = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
+        let mut v_up = INPUT {
+            r#type: INPUT_KEYBOARD,
+            ..Default::default()
+        };
         v_up.Anonymous.ki = KEYBDINPUT {
             wVk: VK_V,
             wScan: 0,
@@ -112,7 +164,10 @@ impl TextInjector {
         inputs.push(v_up);
 
         // Ctrl up
-        let mut ctrl_up = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
+        let mut ctrl_up = INPUT {
+            r#type: INPUT_KEYBOARD,
+            ..Default::default()
+        };
         ctrl_up.Anonymous.ki = KEYBDINPUT {
             wVk: VK_CONTROL,
             wScan: 0,
@@ -126,7 +181,11 @@ impl TextInjector {
             let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
             if sent != inputs.len() as u32 {
                 let _ = Self::restore_clipboard(previous_content);
-                return Err(format!("SendInput sent {} of {} paste inputs", sent, inputs.len()));
+                return Err(format!(
+                    "SendInput sent {} of {} paste inputs",
+                    sent,
+                    inputs.len()
+                ));
             }
         }
 
@@ -159,5 +218,38 @@ impl TextInjector {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{InjectionMode, TextInjector};
+
+    #[test]
+    fn short_text_prefers_typing() {
+        assert_eq!(
+            TextInjector::preferred_mode("short note"),
+            InjectionMode::Typing
+        );
+    }
+
+    #[test]
+    fn long_text_prefers_clipboard_paste() {
+        assert_eq!(
+            TextInjector::preferred_mode(&"a".repeat(100)),
+            InjectionMode::ClipboardPaste
+        );
+    }
+
+    #[test]
+    fn fallback_mode_switches_to_the_other_injection_path() {
+        assert_eq!(
+            TextInjector::fallback_mode(InjectionMode::Typing),
+            InjectionMode::ClipboardPaste
+        );
+        assert_eq!(
+            TextInjector::fallback_mode(InjectionMode::ClipboardPaste),
+            InjectionMode::Typing
+        );
     }
 }

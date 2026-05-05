@@ -11,7 +11,9 @@ fn main() {
     };
 
     let exit_code = serve_worker(|request| match request {
-        WorkerRequest::Transcribe(audio) => transcriber.transcribe(&audio).map_err(|e| e.to_string()),
+        WorkerRequest::Transcribe(audio) => {
+            transcriber.transcribe(&audio).map_err(|e| e.to_string())
+        }
         WorkerRequest::SwapModel(size) => transcriber
             .swap_model(size)
             .map(|_| "ok".to_string())

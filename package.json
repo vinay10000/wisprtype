@@ -1,11 +1,14 @@
 {
-  "name": "temp_app",
+  "name": "wisprflow",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run build:frontend",
+    "build:frontend": "tsc -b && vite build",
+    "stage:sidecars:debug": "powershell -ExecutionPolicy Bypass -File ./scripts/stage-sidecars.ps1 -Profile debug",
+    "stage:sidecars:release": "powershell -ExecutionPolicy Bypass -File ./scripts/stage-sidecars.ps1 -Profile release",
     "lint": "eslint .",
     "preview": "vite preview"
   },

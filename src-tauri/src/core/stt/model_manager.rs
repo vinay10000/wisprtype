@@ -14,7 +14,7 @@ impl ModelSize {
     }
 }
 
-use crate::core::settings::{AppSettings, SettingsStore};
+use crate::core::settings::{app_data_dir, SettingsStore};
 
 pub struct ModelManager {
     model_dir: PathBuf,
@@ -23,9 +23,7 @@ pub struct ModelManager {
 }
 
 fn resolve_app_data_dir() -> Result<PathBuf, String> {
-    let app_data = std::env::var("APPDATA")
-        .map_err(|e| format!("Failed to resolve APPDATA directory: {}", e))?;
-    Ok(PathBuf::from(app_data).join("WisprWin"))
+    app_data_dir()
 }
 
 impl ModelManager {
@@ -67,8 +65,7 @@ impl ModelManager {
             return Err(e);
         }
 
-        fs::rename(&tmp_path, &model_path)
-            .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+        fs::rename(&tmp_path, &model_path).map_err(|e| SttError::ModelDownload(e.to_string()))?;
 
         eprintln!("Download complete.");
         Ok(model_path)
@@ -79,12 +76,13 @@ impl ModelManager {
             .and_then(|r| r.error_for_status())
             .map_err(|e| SttError::ModelDownload(e.to_string()))?;
 
-        let mut file = fs::File::create(dest)
-            .map_err(|e| SttError::ModelDownload(e.to_string()))?;
+        let mut file =
+            fs::File::create(dest).map_err(|e| SttError::ModelDownload(e.to_string()))?;
 
         let mut buf = [0u8; DOWNLOAD_BUFFER_SIZE];
         loop {
-            let n = response.read(&mut buf)
+            let n = response
+                .read(&mut buf)
                 .map_err(|e| SttError::ModelDownload(e.to_string()))?;
             if n == 0 {
                 break;
@@ -93,7 +91,8 @@ impl ModelManager {
                 .map_err(|e| SttError::ModelDownload(e.to_string()))?;
         }
 
-        file.flush().map_err(|e| SttError::ModelDownload(e.to_string()))
+        file.flush()
+            .map_err(|e| SttError::ModelDownload(e.to_string()))
     }
 
     pub fn swap_model(&mut self, size: ModelSize) -> Result<PathBuf, SttError> {
@@ -117,9 +116,11 @@ impl ModelManager {
     }
 
     fn persist_settings(&self) -> Result<(), SttError> {
-        let settings = AppSettings {
-            stt_model_size: self.selected_size,
-        };
+        let mut settings = self
+            .settings_store
+            .load()
+            .map_err(SttError::SettingsPersist)?;
+        settings.stt_model_size = self.selected_size;
         self.settings_store
             .persist(&settings)
             .map_err(|e| SttError::SettingsPersist(e))

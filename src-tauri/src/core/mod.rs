@@ -1,7 +1,9 @@
 pub mod audio;
 #[path = "stt/cloud.rs"]
 pub mod cloud;
+pub mod dictionary;
 pub mod engine;
+pub mod history;
 pub mod injection;
 #[cfg(feature = "refinement-engine")]
 pub mod refinement;

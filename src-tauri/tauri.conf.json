@@ -1,37 +1,39 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "wisprtype",
+  "productName": "wisprflow",
+  "mainBinaryName": "wisprflow",
   "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.wisprflow.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build:frontend"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "WisprType",
-        "width": 800,
-        "height": 600,
+        "title": "wisprflow",
+        "width": 1360,
+        "height": 920,
+        "minWidth": 1080,
+        "minHeight": 720,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false
       },
       {
         "label": "pill",
         "url": "pill.html",
         "title": "",
-        "width": 200,
-        "height": 52,
+        "width": 168,
+        "height": 44,
         "resizable": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "x": 860,
-        "y": 1020
+        "skipTaskbar": true
       }
     ],
     "security": {
@@ -41,6 +43,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/wisprtype-stt-worker",
+      "binaries/wisprtype-refinement-worker"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

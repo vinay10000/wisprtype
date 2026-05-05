@@ -41,8 +41,7 @@ impl SttBackend for CpuBackend {
 
         let mut params = WhisperContextParameters::default();
         params.use_gpu(false);
-        WhisperContext::new_with_params(model_path, params)
-        .map_err(|e| SttError::ModelLoad {
+        WhisperContext::new_with_params(model_path, params).map_err(|e| SttError::ModelLoad {
             backend: "cpu",
             message: e.to_string(),
         })

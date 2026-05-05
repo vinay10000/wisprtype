@@ -1,29 +1,29 @@
 pub mod core;
+mod settings;
+mod system;
 
-use core::cloud::{CloudCredentials, CloudProviderKind};
-use global_hotkey::{
-    hotkey::{Code, HotKey, Modifiers},
-    GlobalHotKeyManager,
-};
+use core::dictionary::DictionaryStore;
+use core::history::TranscriptionStore;
+use core::settings::{app_data_dir, SettingsStore};
+use global_hotkey::GlobalHotKeyManager;
+use settings::AppRuntime;
 use std::thread;
 use tauri::{Emitter, Manager};
-
-#[tauri::command]
-fn store_cloud_api_key(provider: String, api_key: String) -> Result<(), String> {
-    CloudCredentials::write_api_key(CloudProviderKind::parse(&provider), &api_key)
-}
-
-#[tauri::command]
-fn delete_cloud_api_key(provider: String) -> Result<(), String> {
-    CloudCredentials::delete_api_key(CloudProviderKind::parse(&provider))
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            store_cloud_api_key,
-            delete_cloud_api_key
+            settings::get_settings,
+            settings::save_settings,
+            settings::list_dictionary_terms,
+            settings::add_dictionary_term,
+            settings::remove_dictionary_term,
+            settings::list_transcriptions,
+            settings::cloud_api_key_status,
+            settings::store_cloud_api_key,
+            settings::delete_cloud_api_key,
+            system::run_validation_checks
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -34,8 +34,73 @@ pub fn run() {
                 )?;
             }
 
-            let hotkey = HotKey::new(Some(Modifiers::SUPER), Code::Space);
-            let hotkey_id = hotkey.id();
+            let app_dir = match app_data_dir() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    let _ = app.handle().emit(
+                        "engine-state",
+                        core::engine::EngineState::Error(format!(
+                            "Failed to initialize app data directory: {}",
+                            e
+                        )),
+                    );
+                    return Ok(());
+                }
+            };
+            let settings_store = SettingsStore::new(&app_dir);
+            let settings = settings_store.load().unwrap_or_else(|e| {
+                eprintln!("Failed to load settings; using defaults: {}", e);
+                core::settings::AppSettings::default()
+            });
+            if let Err(e) = system::sync_launch_at_login_setting(&settings) {
+                eprintln!("Failed to synchronize launch-at-login: {}", e);
+                let _ = app.handle().emit(
+                    "engine-state",
+                    core::engine::EngineState::Error(format!(
+                        "Failed to configure launch-at-login: {}",
+                        e
+                    )),
+                );
+            }
+            let dictionary_store = match DictionaryStore::new(&app_dir) {
+                Ok(store) => store,
+                Err(e) => {
+                    let _ = app.handle().emit(
+                        "engine-state",
+                        core::engine::EngineState::Error(format!(
+                            "Failed to initialize dictionary: {}",
+                            e
+                        )),
+                    );
+                    return Ok(());
+                }
+            };
+            let transcription_store = match TranscriptionStore::new(&app_dir) {
+                Ok(store) => store,
+                Err(e) => {
+                    let _ = app.handle().emit(
+                        "engine-state",
+                        core::engine::EngineState::Error(format!(
+                            "Failed to initialize transcription history: {}",
+                            e
+                        )),
+                    );
+                    return Ok(());
+                }
+            };
+
+            let (hotkey, hotkey_source) = match settings::parse_hotkey(&settings.hotkey) {
+                Ok(hotkey) => (hotkey, settings.hotkey.as_str()),
+                Err(e) => {
+                    eprintln!("Invalid saved hotkey; falling back to Super+Space: {}", e);
+                    (
+                        settings::parse_hotkey("Super+Space").expect("default hotkey parses"),
+                        "Super+Space",
+                    )
+                }
+            };
+            let active_binding =
+                settings::parse_hotkey_binding(hotkey_source, hotkey.id()).unwrap_or_default();
             let hotkey_manager = match GlobalHotKeyManager::new() {
                 Ok(manager) => manager,
                 Err(e) => {
@@ -54,26 +119,46 @@ pub fn run() {
                 let _ = app.handle().emit(
                     "engine-state",
                     core::engine::EngineState::Error(format!(
-                        "Failed to register Win+Space hotkey: {}",
-                        e
+                        "{}",
+                        system::format_hotkey_registration_error(hotkey_source, e)
                     )),
                 );
                 return Ok(());
             }
 
-            app.manage(hotkey_manager);
+            let mut runtime = AppRuntime::new(
+                settings_store,
+                dictionary_store,
+                transcription_store,
+                hotkey_manager,
+                hotkey,
+                active_binding,
+            );
+            let active_hotkey = runtime.active_binding.clone();
+            let shutdown_requested = runtime.shutdown_requested.clone();
 
             if let Some(pill) = app.get_webview_window("pill") {
                 if let Err(e) = pill.set_ignore_cursor_events(true) {
                     eprintln!("Failed to configure pill click-through: {}", e);
                 }
             }
+            settings::apply_pill_settings(app.handle(), &settings);
+            if let Err(e) = system::install_tray(app.handle()) {
+                let _ = app.handle().emit(
+                    "engine-state",
+                    core::engine::EngineState::Error(format!(
+                        "Failed to initialize system tray: {}",
+                        e
+                    )),
+                );
+                return Ok(());
+            }
 
             // Spawn CoreEngine thread with app handle for event emission
             let handle = app.handle().clone();
             let event_handle = handle.clone();
-            thread::spawn(
-                move || match core::engine::CoreEngine::new(handle, hotkey_id) {
+            let engine_thread = thread::spawn(move || {
+                match core::engine::CoreEngine::new(handle, active_hotkey, shutdown_requested) {
                     Ok(engine) => engine.run(),
                     Err(e) => {
                         eprintln!("Failed to initialize CoreEngine: {}", e);
@@ -85,11 +170,26 @@ pub fn run() {
                             )),
                         );
                     }
-                },
-            );
+                }
+            });
+            runtime.track_engine_thread(engine_thread);
+            app.manage(runtime);
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .on_window_event(|window, event| {
+            system::handle_window_event(window.label(), event, &window.app_handle());
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                if let Some(runtime) = app.try_state::<AppRuntime>() {
+                    runtime.cleanup();
+                }
+            }
+        });
 }

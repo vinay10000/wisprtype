@@ -22,7 +22,9 @@ impl AudioCapturer {
     pub fn start(&mut self) -> Result<(), String> {
         self.clear();
         let host = cpal::default_host();
-        let device = host.default_input_device().ok_or("No input device available")?;
+        let device = host
+            .default_input_device()
+            .ok_or("No input device available")?;
         let config = device.default_input_config().map_err(|e| e.to_string())?;
 
         self.sample_rate = config.sample_rate().0;
@@ -30,9 +32,9 @@ impl AudioCapturer {
 
         let sample_format = config.sample_format();
         let config: cpal::StreamConfig = config.into();
-        
+
         let buffer_arc = self.buffer.clone();
-        
+
         let err_fn = |err| eprintln!("an error occurred on stream: {}", err);
 
         let channels = self.channels;
@@ -62,10 +64,8 @@ impl AudioCapturer {
                             buf.extend(data.iter().map(|&s| s as f32 / i16::MAX as f32));
                         } else {
                             for chunk in data.chunks(channels as usize) {
-                                let sum: f32 = chunk
-                                    .iter()
-                                    .map(|&s| s as f32 / i16::MAX as f32)
-                                    .sum();
+                                let sum: f32 =
+                                    chunk.iter().map(|&s| s as f32 / i16::MAX as f32).sum();
                                 buf.push(sum / chunk.len() as f32);
                             }
                         }
@@ -93,7 +93,8 @@ impl AudioCapturer {
                 None,
             ),
             _ => return Err("Unsupported sample format".to_string()),
-        }.map_err(|e| e.to_string())?;
+        }
+        .map_err(|e| e.to_string())?;
 
         stream.play().map_err(|e| e.to_string())?;
         self.stream = Some(stream);
@@ -101,9 +102,9 @@ impl AudioCapturer {
     }
 
     pub fn stop(&mut self) {
-        self.stream = None; 
+        self.stream = None;
     }
-    
+
     pub fn clear(&mut self) {
         if let Ok(mut buf) = self.buffer.lock() {
             buf.clear();
@@ -117,7 +118,7 @@ impl AudioCapturer {
         if self.sample_rate == 16000 {
             return buf.clone();
         }
-        
+
         // Naive nearest-neighbor resampling to 16000Hz
         let mut resampled = Vec::new();
         let ratio = self.sample_rate as f32 / 16000.0;

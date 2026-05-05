@@ -2,11 +2,15 @@ use crate::core::settings::ModelSize;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 const STT_WORKER_EXE: &str = "wisprtype-stt-worker";
 const REFINEMENT_WORKER_EXE: &str = "wisprtype-refinement-worker";
+const TARGET_TRIPLE: &str = match option_env!("TAURI_ENV_TARGET_TRIPLE") {
+    Some(value) => value,
+    None => "x86_64-pc-windows-msvc",
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum WorkerKind {
@@ -126,18 +130,12 @@ impl NativeWorker {
         writeln!(process.stdin, "{}", payload)
             .and_then(|_| process.stdin.flush())
             .map_err(|e| {
-                RequestError::Transport(format!(
-                    "Failed to send request to {}: {}",
-                    label, e
-                ))
+                RequestError::Transport(format!("Failed to send request to {}: {}", label, e))
             })?;
 
         let mut line = String::new();
         let bytes = process.stdout.read_line(&mut line).map_err(|e| {
-            RequestError::Transport(format!(
-                "Failed to read response from {}: {}",
-                label, e
-            ))
+            RequestError::Transport(format!("Failed to read response from {}: {}", label, e))
         })?;
 
         if bytes == 0 {
@@ -148,10 +146,7 @@ impl NativeWorker {
         }
 
         let response: WorkerResponseEnvelope = serde_json::from_str(&line).map_err(|e| {
-            RequestError::Transport(format!(
-                "{} returned invalid response: {}",
-                label, e
-            ))
+            RequestError::Transport(format!("{} returned invalid response: {}", label, e))
         })?;
 
         if response.id != id {
@@ -204,7 +199,7 @@ impl NativeWorker {
 }
 
 fn worker_executable(kind: WorkerKind) -> Result<PathBuf, String> {
-    let exe_name = worker_exe_name(kind);
+    let base_name = worker_base_name(kind);
     let current_exe = env::current_exe().map_err(|e| {
         format!(
             "Failed to locate current executable for {}: {}",
@@ -214,32 +209,36 @@ fn worker_executable(kind: WorkerKind) -> Result<PathBuf, String> {
     })?;
 
     if let Some(dir) = current_exe.parent() {
-        let candidate = dir.join(&exe_name);
+        for candidate in worker_candidates(dir, base_name) {
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    let cwd =
+        env::current_dir().map_err(|e| format!("Failed to resolve current directory: {}", e))?;
+    for candidate in worker_candidates(&cwd, base_name) {
         if candidate.exists() {
             return Ok(candidate);
         }
     }
 
-    let cwd_candidate = env::current_dir()
-        .map_err(|e| format!("Failed to resolve current directory: {}", e))?
-        .join(&exe_name);
-    if cwd_candidate.exists() {
-        return Ok(cwd_candidate);
-    }
-
     Err(format!(
-        "{} executable `{}` was not found next to the app binary",
+        "{} executable `{}` was not found in the app directory, bundled sidecar directory, or current working directory",
         kind.label(),
-        exe_name
+        worker_exe_name(base_name)
     ))
 }
 
-fn worker_exe_name(kind: WorkerKind) -> String {
-    let base = match kind {
+fn worker_base_name(kind: WorkerKind) -> &'static str {
+    match kind {
         WorkerKind::Stt => STT_WORKER_EXE,
         WorkerKind::Refinement => REFINEMENT_WORKER_EXE,
-    };
+    }
+}
 
+fn worker_exe_name(base: &str) -> String {
     #[cfg(windows)]
     {
         format!("{base}.exe")
@@ -248,6 +247,47 @@ fn worker_exe_name(kind: WorkerKind) -> String {
     #[cfg(not(windows))]
     {
         base.to_string()
+    }
+}
+
+fn worker_packaged_name(base: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!("{base}-{TARGET_TRIPLE}.exe")
+    }
+
+    #[cfg(not(windows))]
+    {
+        format!("{base}-{TARGET_TRIPLE}")
+    }
+}
+
+fn worker_candidates(root: &Path, base: &str) -> Vec<PathBuf> {
+    let exe_name = worker_exe_name(base);
+    let packaged_name = worker_packaged_name(base);
+    vec![
+        root.join(&exe_name),
+        root.join(&packaged_name),
+        root.join("binaries").join(&exe_name),
+        root.join("binaries").join(&packaged_name),
+    ]
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::{worker_candidates, worker_exe_name, worker_packaged_name};
+    use std::path::Path;
+
+    #[test]
+    fn bundled_sidecar_candidates_include_binaries_directory() {
+        let root = Path::new(r"C:\Apps\wisprflow");
+        let candidates = worker_candidates(root, "wisprtype-stt-worker");
+        assert!(candidates.iter().any(|path| {
+            path.ends_with(Path::new("binaries").join(worker_packaged_name("wisprtype-stt-worker")))
+        }));
+        assert!(candidates
+            .iter()
+            .any(|path| path.ends_with(worker_exe_name("wisprtype-stt-worker"))));
     }
 }
 

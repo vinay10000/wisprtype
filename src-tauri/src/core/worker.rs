@@ -1,13 +1,12 @@
-use crate::core::refinement::RefinementEngine;
-use crate::core::stt::{BasicTranscriber, ModelSize};
+use crate::core::settings::ModelSize;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{self, Child, ChildStdin, Command, Stdio};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, Command, Stdio};
 
-const WORKER_ARG: &str = "--wisprtype-worker";
-const STT_WORKER: &str = "stt";
-const REFINEMENT_WORKER: &str = "refine";
+const STT_WORKER_EXE: &str = "wisprtype-stt-worker";
+const REFINEMENT_WORKER_EXE: &str = "wisprtype-refinement-worker";
 
 #[derive(Debug, Clone, Copy)]
 pub enum WorkerKind {
@@ -16,13 +15,6 @@ pub enum WorkerKind {
 }
 
 impl WorkerKind {
-    fn as_arg(self) -> &'static str {
-        match self {
-            Self::Stt => STT_WORKER,
-            Self::Refinement => REFINEMENT_WORKER,
-        }
-    }
-
     fn label(self) -> &'static str {
         match self {
             Self::Stt => "STT worker",
@@ -33,7 +25,7 @@ impl WorkerKind {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
-enum WorkerRequest {
+pub enum WorkerRequest {
     Transcribe(Vec<f32>),
     Refine(String),
     SwapModel(ModelSize),
@@ -176,17 +168,9 @@ impl NativeWorker {
     }
 
     fn spawn_process(kind: WorkerKind) -> Result<WorkerProcess, String> {
-        let exe = env::current_exe().map_err(|e| {
-            format!(
-                "Failed to locate current executable for {}: {}",
-                kind.label(),
-                e
-            )
-        })?;
+        let exe = worker_executable(kind)?;
 
         let mut child = Command::new(exe)
-            .arg(WORKER_ARG)
-            .arg(kind.as_arg())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -219,72 +203,61 @@ impl NativeWorker {
     }
 }
 
+fn worker_executable(kind: WorkerKind) -> Result<PathBuf, String> {
+    let exe_name = worker_exe_name(kind);
+    let current_exe = env::current_exe().map_err(|e| {
+        format!(
+            "Failed to locate current executable for {}: {}",
+            kind.label(),
+            e
+        )
+    })?;
+
+    if let Some(dir) = current_exe.parent() {
+        let candidate = dir.join(&exe_name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let cwd_candidate = env::current_dir()
+        .map_err(|e| format!("Failed to resolve current directory: {}", e))?
+        .join(&exe_name);
+    if cwd_candidate.exists() {
+        return Ok(cwd_candidate);
+    }
+
+    Err(format!(
+        "{} executable `{}` was not found next to the app binary",
+        kind.label(),
+        exe_name
+    ))
+}
+
+fn worker_exe_name(kind: WorkerKind) -> String {
+    let base = match kind {
+        WorkerKind::Stt => STT_WORKER_EXE,
+        WorkerKind::Refinement => REFINEMENT_WORKER_EXE,
+    };
+
+    #[cfg(windows)]
+    {
+        format!("{base}.exe")
+    }
+
+    #[cfg(not(windows))]
+    {
+        base.to_string()
+    }
+}
+
 impl Drop for NativeWorker {
     fn drop(&mut self) {
         self.stop_process();
     }
 }
 
-pub fn run_if_requested() -> bool {
-    let mut args = env::args();
-    let _exe = args.next();
-    if args.next().as_deref() != Some(WORKER_ARG) {
-        return false;
-    }
-
-    let exit_code = match args.next().as_deref() {
-        Some(STT_WORKER) => run_stt_worker(),
-        Some(REFINEMENT_WORKER) => run_refinement_worker(),
-        Some(other) => {
-            eprintln!("Unknown WisprType worker kind: {}", other);
-            2
-        }
-        None => {
-            eprintln!("Missing WisprType worker kind");
-            2
-        }
-    };
-
-    process::exit(exit_code);
-}
-
-fn run_stt_worker() -> i32 {
-    let mut transcriber = match BasicTranscriber::new() {
-        Ok(transcriber) => transcriber,
-        Err(e) => {
-            eprintln!("Failed to initialize STT worker: {}", e);
-            return 1;
-        }
-    };
-
-    serve_worker(|request| match request {
-        WorkerRequest::Transcribe(audio) => transcriber.transcribe(&audio).map_err(|e| e.to_string()),
-        WorkerRequest::SwapModel(size) => transcriber.swap_model(size).map(|_| "ok".to_string()).map_err(|e| e.to_string()),
-        WorkerRequest::Refine(_) => Err("STT worker received a refinement request".to_string()),
-    })
-}
-
-fn run_refinement_worker() -> i32 {
-    let refinement = match RefinementEngine::new() {
-        Ok(refinement) => refinement,
-        Err(e) => {
-            eprintln!("Failed to initialize refinement worker: {}", e);
-            return 1;
-        }
-    };
-
-    serve_worker(|request| match request {
-        WorkerRequest::Refine(text) => Ok(refinement.clean(text)),
-        WorkerRequest::SwapModel(_) => {
-            Err("Refinement worker received a model swap request".to_string())
-        }
-        WorkerRequest::Transcribe(_) => {
-            Err("Refinement worker received a transcription request".to_string())
-        }
-    })
-}
-
-fn serve_worker<F>(mut handle_request: F) -> i32
+pub fn serve_worker<F>(mut handle_request: F) -> i32
 where
     F: FnMut(WorkerRequest) -> Result<String, String>,
 {

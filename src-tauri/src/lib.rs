@@ -1,5 +1,6 @@
 pub mod core;
 
+use core::cloud::{CloudCredentials, CloudProviderKind};
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyManager,
@@ -7,13 +8,23 @@ use global_hotkey::{
 use std::thread;
 use tauri::{Emitter, Manager};
 
+#[tauri::command]
+fn store_cloud_api_key(provider: String, api_key: String) -> Result<(), String> {
+    CloudCredentials::write_api_key(CloudProviderKind::parse(&provider), &api_key)
+}
+
+#[tauri::command]
+fn delete_cloud_api_key(provider: String) -> Result<(), String> {
+    CloudCredentials::delete_api_key(CloudProviderKind::parse(&provider))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if core::worker::run_if_requested() {
-        return;
-    }
-
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            store_cloud_api_key,
+            delete_cloud_api_key
+        ])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

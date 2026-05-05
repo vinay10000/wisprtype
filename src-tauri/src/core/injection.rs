@@ -30,7 +30,7 @@ impl TextInjector {
         for c in text.encode_utf16() {
             // Key down
             let mut down = INPUT {
-                type_: INPUT_KEYBOARD,
+                r#type: INPUT_KEYBOARD,
                 ..Default::default()
             };
             down.Anonymous.ki = KEYBDINPUT {
@@ -44,7 +44,7 @@ impl TextInjector {
 
             // Key up
             let mut up = INPUT {
-                type_: INPUT_KEYBOARD,
+                r#type: INPUT_KEYBOARD,
                 ..Default::default()
             };
             up.Anonymous.ki = KEYBDINPUT {
@@ -79,7 +79,7 @@ impl TextInjector {
         let mut inputs: Vec<INPUT> = Vec::new();
         
         // Ctrl down
-        let mut ctrl_down = INPUT { type_: INPUT_KEYBOARD, ..Default::default() };
+        let mut ctrl_down = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
         ctrl_down.Anonymous.ki = KEYBDINPUT {
             wVk: VK_CONTROL,
             wScan: 0,
@@ -90,7 +90,7 @@ impl TextInjector {
         inputs.push(ctrl_down);
 
         // V down
-        let mut v_down = INPUT { type_: INPUT_KEYBOARD, ..Default::default() };
+        let mut v_down = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
         v_down.Anonymous.ki = KEYBDINPUT {
             wVk: VK_V,
             wScan: 0,
@@ -101,7 +101,7 @@ impl TextInjector {
         inputs.push(v_down);
 
         // V up
-        let mut v_up = INPUT { type_: INPUT_KEYBOARD, ..Default::default() };
+        let mut v_up = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
         v_up.Anonymous.ki = KEYBDINPUT {
             wVk: VK_V,
             wScan: 0,
@@ -112,7 +112,7 @@ impl TextInjector {
         inputs.push(v_up);
 
         // Ctrl up
-        let mut ctrl_up = INPUT { type_: INPUT_KEYBOARD, ..Default::default() };
+        let mut ctrl_up = INPUT { r#type: INPUT_KEYBOARD, ..Default::default() };
         ctrl_up.Anonymous.ki = KEYBDINPUT {
             wVk: VK_CONTROL,
             wScan: 0,

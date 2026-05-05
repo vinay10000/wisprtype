@@ -1,39 +1,14 @@
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
+use crate::core::settings::ModelSize;
 use crate::core::stt::SttError;
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 const DOWNLOAD_BUFFER_SIZE: usize = 64 * 1024;
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ModelSize {
-    Tiny,
-    Base,
-    Small,
-    Medium,
-    Large,
-}
-
-impl Default for ModelSize {
-    fn default() -> Self {
-        Self::Base
-    }
-}
 
 impl ModelSize {
-    pub fn filename(self) -> &'static str {
-        match self {
-            Self::Tiny => "ggml-tiny.en.bin",
-            Self::Base => "ggml-base.en.bin",
-            Self::Small => "ggml-small.en.bin",
-            Self::Medium => "ggml-medium.en.bin",
-            Self::Large => "ggml-large-v3.bin",
-        }
-    }
-
     pub fn download_url(self) -> String {
         format!("{}/{}", MODEL_BASE_URL, self.filename())
     }

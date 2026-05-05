@@ -39,10 +39,9 @@ impl SttBackend for CpuBackend {
             return Err(SttError::BackendNotInitialized("cpu"));
         }
 
-        WhisperContext::new_with_params(
-            &model_path.to_string_lossy(),
-            WhisperContextParameters::default(),
-        )
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(false);
+        WhisperContext::new_with_params(model_path, params)
         .map_err(|e| SttError::ModelLoad {
             backend: "cpu",
             message: e.to_string(),
@@ -51,9 +50,19 @@ impl SttBackend for CpuBackend {
 }
 
 #[derive(Default)]
-pub struct CudaBackend;
+pub struct CudaBackend {
+    #[cfg(feature = "cuda")]
+    initialized: bool,
+}
 
 impl SttBackend for CudaBackend {
+    #[cfg(feature = "cuda")]
+    fn initialize(&mut self, _model_path: &Path) -> Result<(), SttError> {
+        self.initialized = true;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "cuda"))]
     fn initialize(&mut self, _model_path: &Path) -> Result<(), SttError> {
         Err(SttError::BackendUnavailable {
             backend: "cuda",
@@ -68,6 +77,21 @@ impl SttBackend for CudaBackend {
         }
     }
 
+    #[cfg(feature = "cuda")]
+    fn create_context(&self, model_path: &Path) -> Result<WhisperContext, SttError> {
+        if !self.initialized {
+            return Err(SttError::BackendNotInitialized("cuda"));
+        }
+
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(true);
+        WhisperContext::new_with_params(model_path, params).map_err(|e| SttError::ModelLoad {
+            backend: "cuda",
+            message: e.to_string(),
+        })
+    }
+
+    #[cfg(not(feature = "cuda"))]
     fn create_context(&self, _model_path: &Path) -> Result<WhisperContext, SttError> {
         Err(SttError::BackendUnavailable {
             backend: "cuda",
@@ -77,14 +101,14 @@ impl SttBackend for CudaBackend {
 }
 
 #[derive(Default)]
-pub struct OpenVinoBackend;
+pub struct OpenVinoBackend {
+    initialized: bool,
+}
 
 impl SttBackend for OpenVinoBackend {
     fn initialize(&mut self, _model_path: &Path) -> Result<(), SttError> {
-        Err(SttError::BackendUnavailable {
-            backend: "openvino",
-            message: "OpenVINO backend is not available in this build".to_string(),
-        })
+        self.initialized = true;
+        Ok(())
     }
 
     fn capabilities(&self) -> BackendCapabilities {
@@ -94,10 +118,16 @@ impl SttBackend for OpenVinoBackend {
         }
     }
 
-    fn create_context(&self, _model_path: &Path) -> Result<WhisperContext, SttError> {
-        Err(SttError::BackendUnavailable {
+    fn create_context(&self, model_path: &Path) -> Result<WhisperContext, SttError> {
+        if !self.initialized {
+            return Err(SttError::BackendNotInitialized("openvino"));
+        }
+
+        let mut params = WhisperContextParameters::default();
+        params.use_gpu(true);
+        WhisperContext::new_with_params(model_path, params).map_err(|e| SttError::ModelLoad {
             backend: "openvino",
-            message: "OpenVINO backend is not available in this build".to_string(),
+            message: e.to_string(),
         })
     }
 }

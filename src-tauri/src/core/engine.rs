@@ -1,6 +1,6 @@
 use crate::core::audio::AudioCapturer;
 use crate::core::injection::TextInjector;
-use crate::core::stt::ModelSize;
+use crate::core::settings::ModelSize;
 use crate::core::worker::{NativeWorker, WorkerKind};
 
 use global_hotkey::GlobalHotKeyEvent;
@@ -168,19 +168,15 @@ impl CoreEngine {
     pub fn run(&self) {
         let global_hotkey_channel = GlobalHotKeyEvent::receiver();
 
-        let mut is_recording = false;
-
         // Emit initial idle state
         self.emit_state(EngineState::Idle);
 
         loop {
             if let Ok(event) = global_hotkey_channel.try_recv() {
-                if event.id == self.hotkey_id && !is_recording {
+                if event.id == self.hotkey_id {
                     if self.start_recording() {
-                        is_recording = true;
                         Self::wait_for_hotkey_release();
                         self.finish_recording();
-                        is_recording = false;
                     }
                 }
             }

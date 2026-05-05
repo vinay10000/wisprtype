@@ -4,8 +4,6 @@ use std::io::Write;
 use std::path::PathBuf;
 
 const MODEL_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
-const SETTINGS_FILE: &str = "settings.json";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModelSize {
@@ -38,11 +36,7 @@ impl ModelSize {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-struct AppSettings {
-    #[serde(default)]
-    stt_model_size: ModelSize,
-}
+use crate::core::settings::{AppSettings, SettingsStore};
 
 pub struct ModelManager {
     model_dir: PathBuf,
@@ -53,7 +47,8 @@ impl ModelManager {
     pub fn new() -> Result<Self, String> {
         let cwd = std::env::current_dir()
             .map_err(|e| format!("Failed to resolve app directory: {}", e))?;
-        let settings = Self::load_settings(&cwd)?;
+        let settings_store = SettingsStore::new(&cwd);
+        let settings = settings_store.load()?;
         let model_dir = cwd.join("models");
         fs::create_dir_all(&model_dir).map_err(|e| e.to_string())?;
 
@@ -61,10 +56,6 @@ impl ModelManager {
             model_dir,
             selected_size: settings.stt_model_size,
         })
-    }
-
-    pub fn selected_size(&self) -> ModelSize {
-        self.selected_size
     }
 
     pub fn active_model_path(&self) -> PathBuf {
@@ -78,7 +69,10 @@ impl ModelManager {
         }
 
         let model_name = self.selected_size.filename();
-        println!("Downloading Whisper model ({})... this may take a minute.", model_name);
+        println!(
+            "Downloading Whisper model ({})... this may take a minute.",
+            model_name
+        );
 
         let response = reqwest::blocking::get(self.selected_size.download_url())
             .and_then(|response| response.error_for_status())
@@ -102,28 +96,13 @@ impl ModelManager {
         self.ensure_model_downloaded()
     }
 
-    fn settings_path(cwd: &std::path::Path) -> PathBuf {
-        cwd.join(SETTINGS_FILE)
-    }
-
-    fn load_settings(cwd: &std::path::Path) -> Result<AppSettings, String> {
-        let settings_path = Self::settings_path(cwd);
-        if !settings_path.exists() {
-            return Ok(AppSettings::default());
-        }
-
-        let settings_raw = fs::read_to_string(settings_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&settings_raw).map_err(|e| e.to_string())
-    }
-
     fn persist_settings(&self) -> Result<(), String> {
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        let settings_path = Self::settings_path(&cwd);
+        let settings_store = SettingsStore::new(&cwd);
         let settings = AppSettings {
             stt_model_size: self.selected_size,
         };
 
-        let body = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-        fs::write(settings_path, body).map_err(|e| e.to_string())
+        settings_store.persist(&settings)
     }
 }

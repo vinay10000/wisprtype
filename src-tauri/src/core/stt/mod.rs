@@ -1,7 +1,7 @@
 mod model_manager;
 
-pub use model_manager::ModelSize;
 use model_manager::ModelManager;
+pub use model_manager::ModelSize;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 pub struct BasicTranscriber {

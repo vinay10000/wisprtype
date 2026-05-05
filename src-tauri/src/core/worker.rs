@@ -244,7 +244,7 @@ pub fn run_if_requested() -> bool {
 }
 
 fn run_stt_worker() -> i32 {
-    let transcriber = match BasicTranscriber::new() {
+    let mut transcriber = match BasicTranscriber::new() {
         Ok(transcriber) => transcriber,
         Err(e) => {
             eprintln!("Failed to initialize STT worker: {}", e);
@@ -253,7 +253,7 @@ fn run_stt_worker() -> i32 {
     };
 
     serve_worker(|request| match request {
-        WorkerRequest::Transcribe(audio) => transcriber.transcribe(&audio),
+        WorkerRequest::Transcribe(audio) => transcriber.transcribe(&audio).map_err(|e| e.to_string()),
         WorkerRequest::Refine(_) => Err("STT worker received a refinement request".to_string()),
     })
 }

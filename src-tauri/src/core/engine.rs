@@ -1,5 +1,6 @@
 use crate::core::audio::AudioCapturer;
 use crate::core::injection::TextInjector;
+use crate::core::stt::ModelSize;
 use crate::core::worker::{NativeWorker, WorkerKind};
 
 use global_hotkey::GlobalHotKeyEvent;
@@ -156,6 +157,14 @@ impl CoreEngine {
         self.emit_state(EngineState::Idle);
     }
 
+
+    pub fn swap_model(&self, size: ModelSize) -> Result<(), String> {
+        let mut worker = self
+            .stt_worker
+            .lock()
+            .map_err(|_| "STT worker lock is unavailable".to_string())?;
+        worker.swap_model(size).map(|_| ())
+    }
     pub fn run(&self) {
         let global_hotkey_channel = GlobalHotKeyEvent::receiver();
 

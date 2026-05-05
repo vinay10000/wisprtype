@@ -1,11 +1,12 @@
 mod backends;
+mod model_manager;
 
 use std::fmt::{Display, Formatter};
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 use backends::{CpuBackend, CudaBackend, OpenVinoBackend, SttBackend};
+use model_manager::ModelManager;
+pub use model_manager::ModelSize;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 #[derive(Debug)]
@@ -17,6 +18,7 @@ pub enum SttError {
     BackendNotInitialized(&'static str),
     NoBackendAvailable { attempts: Vec<String> },
     Inference { backend: &'static str, message: String },
+    SettingsPersist(String),
 }
 
 impl Display for SttError {
@@ -39,6 +41,7 @@ impl Display for SttError {
             Self::Inference { backend, message } => {
                 write!(f, "{} backend inference failed: {}", backend, message)
             }
+            Self::SettingsPersist(m) => write!(f, "Failed to persist settings: {}", m),
         }
     }
 }
@@ -46,16 +49,24 @@ impl Display for SttError {
 pub struct BasicTranscriber {
     context: WhisperContext,
     backend_name: &'static str,
-    model_path: PathBuf,
+    model_manager: ModelManager,
 }
 
 impl BasicTranscriber {
     pub fn new() -> Result<Self, SttError> {
-        let model_path = Self::ensure_model_downloaded()?;
-        Self::from_backends(&model_path)
+        let model_manager = ModelManager::new()
+            .map_err(|e| SttError::ModelDirResolve(e))?;
+        let model_path = model_manager.ensure_model_downloaded()?;
+        let (context, backend_name) = Self::load_from_backends(&model_path)?;
+
+        Ok(Self {
+            context,
+            backend_name,
+            model_manager,
+        })
     }
 
-    fn from_backends(model_path: &PathBuf) -> Result<Self, SttError> {
+    fn load_from_backends(model_path: &PathBuf) -> Result<(WhisperContext, &'static str), SttError> {
         let mut attempts = Vec::new();
         let mut candidates: Vec<Box<dyn SttBackend>> = vec![
             Box::new(CudaBackend::default()),
@@ -71,9 +82,7 @@ impl BasicTranscriber {
             }
 
             match backend.initialize(model_path).and_then(|_| backend.create_context(model_path)) {
-                Ok(context) => {
-                    return Ok(Self { context, backend_name: name, model_path: model_path.clone() });
-                }
+                Ok(context) => return Ok((context, name)),
                 Err(e) => attempts.push(e.to_string()),
             }
         }
@@ -81,46 +90,22 @@ impl BasicTranscriber {
         Err(SttError::NoBackendAvailable { attempts })
     }
 
-    fn ensure_model_downloaded() -> Result<PathBuf, SttError> {
-        let model_name = "ggml-base.en.bin";
-        let model_dir = std::env::current_dir()
-            .map_err(|e| SttError::ModelDirResolve(format!("Failed to resolve model directory: {}", e)))?
-            .join("models");
-
-        if !model_dir.exists() {
-            fs::create_dir_all(&model_dir)
-                .map_err(|e| SttError::ModelDownload(format!("Failed to create model directory: {}", e)))?;
-        }
-
-        let model_path = model_dir.join(model_name);
-
-        if !model_path.exists() {
-            println!("Downloading Whisper model ({})... this may take a minute.", model_name);
-            let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{}", model_name);
-            let response = reqwest::blocking::get(&url)
-                .and_then(|response| response.error_for_status())
-                .map_err(|e| SttError::ModelDownload(e.to_string()))?;
-
-            let mut file = fs::File::create(&model_path)
-                .map_err(|e| SttError::ModelDownload(e.to_string()))?;
-            let bytes = response
-                .bytes()
-                .map_err(|e| SttError::ModelDownload(e.to_string()))?;
-            file.write_all(&bytes)
-                .map_err(|e| SttError::ModelDownload(e.to_string()))?;
-            println!("Download complete.");
-        }
-
-        Ok(model_path)
+    pub fn swap_model(&mut self, size: ModelSize) -> Result<(), SttError> {
+        let model_path = self.model_manager.swap_model(size)?;
+        let (new_context, new_backend) = Self::load_from_backends(&model_path)?;
+        self.context = new_context;
+        self.backend_name = new_backend;
+        Ok(())
     }
 
     pub fn transcribe(&mut self, audio_data: &[f32]) -> Result<String, SttError> {
         match self.transcribe_once(audio_data) {
             Ok(text) => Ok(text),
             Err(e) if self.backend_name != "cpu" => {
+                let model_path = self.model_manager.active_model_path();
                 let mut cpu = CpuBackend::default();
-                cpu.initialize(&self.model_path)?;
-                self.context = cpu.create_context(&self.model_path)?;
+                cpu.initialize(&model_path)?;
+                self.context = cpu.create_context(&model_path)?;
                 self.backend_name = "cpu";
                 self.transcribe_once(audio_data).map_err(|fallback_err| SttError::NoBackendAvailable {
                     attempts: vec![e.to_string(), fallback_err.to_string()],

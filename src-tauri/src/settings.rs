@@ -1,6 +1,7 @@
 use crate::core::cloud::{CloudCredentials, CloudProviderKind};
 use crate::core::dictionary::{DictionaryStore, DictionaryTerm};
 use crate::core::history::{TranscriptionEntry, TranscriptionStore};
+use crate::core::injection::TextInjector;
 use crate::core::settings::{AppSettings, SettingsStore};
 use crate::system;
 use global_hotkey::{hotkey::HotKey, GlobalHotKeyManager};
@@ -184,12 +185,47 @@ pub fn remove_dictionary_term(state: State<'_, AppRuntime>, id: i64) -> Result<(
 pub fn list_transcriptions(
     state: State<'_, AppRuntime>,
     limit: Option<i64>,
+    query: Option<String>,
 ) -> Result<Vec<TranscriptionEntry>, String> {
     state
         .transcription_store
         .lock()
         .map_err(|_| "Transcription history store lock is unavailable".to_string())?
-        .list_recent(limit.unwrap_or(100))
+        .search(query.as_deref(), limit.unwrap_or(100))
+}
+
+#[tauri::command]
+pub fn get_transcription(
+    state: State<'_, AppRuntime>,
+    id: i64,
+) -> Result<Option<TranscriptionEntry>, String> {
+    state
+        .transcription_store
+        .lock()
+        .map_err(|_| "Transcription history store lock is unavailable".to_string())?
+        .get(id)
+}
+
+#[tauri::command]
+pub fn delete_transcription(state: State<'_, AppRuntime>, id: i64) -> Result<(), String> {
+    state
+        .transcription_store
+        .lock()
+        .map_err(|_| "Transcription history store lock is unavailable".to_string())?
+        .delete(id)
+}
+
+#[tauri::command]
+pub fn reinsert_transcription(state: State<'_, AppRuntime>, id: i64) -> Result<TranscriptionEntry, String> {
+    let entry = state
+        .transcription_store
+        .lock()
+        .map_err(|_| "Transcription history store lock is unavailable".to_string())?
+        .get(id)?
+        .ok_or_else(|| format!("Transcription {} could not be found", id))?;
+
+    TextInjector::inject(entry.text.clone())?;
+    Ok(entry)
 }
 
 #[tauri::command]

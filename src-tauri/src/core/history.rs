@@ -30,28 +30,62 @@ impl TranscriptionStore {
     }
 
     pub fn list_recent(&self, limit: i64) -> Result<Vec<TranscriptionEntry>, String> {
-        let connection = self.open()?;
-        let mut statement = connection
-            .prepare(
-                "SELECT id, text, created_at, duration_secs
-                 FROM transcriptions
-                 ORDER BY created_at DESC, id DESC
-                 LIMIT ?1",
-            )
-            .map_err(classify_sqlite_error)?;
-        let rows = statement
-            .query_map(params![limit.clamp(1, 500)], |row| {
-                Ok(TranscriptionEntry {
-                    id: row.get(0)?,
-                    text: row.get(1)?,
-                    created_at: row.get(2)?,
-                    duration_secs: row.get(3)?,
-                })
-            })
-            .map_err(classify_sqlite_error)?;
+        self.search(None, limit)
+    }
 
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(classify_sqlite_error)
+    pub fn search(&self, query: Option<&str>, limit: i64) -> Result<Vec<TranscriptionEntry>, String> {
+        let connection = self.open()?;
+        let normalized_query = query
+            .map(|value| value.replace('\0', "").trim().to_string())
+            .filter(|value| !value.is_empty());
+        let clamped_limit = limit.clamp(1, 500);
+
+        if let Some(query) = normalized_query {
+            let mut statement = connection
+                .prepare(
+                    "SELECT id, text, created_at, duration_secs
+                     FROM transcriptions
+                     WHERE text LIKE ?1 ESCAPE '\\'
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT ?2",
+                )
+                .map_err(classify_sqlite_error)?;
+            let rows = statement
+                .query_map(params![like_pattern(&query), clamped_limit], |row| {
+                    Ok(TranscriptionEntry {
+                        id: row.get(0)?,
+                        text: row.get(1)?,
+                        created_at: row.get(2)?,
+                        duration_secs: row.get(3)?,
+                    })
+                })
+                .map_err(classify_sqlite_error)?;
+
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(classify_sqlite_error)
+        } else {
+            let mut statement = connection
+                .prepare(
+                    "SELECT id, text, created_at, duration_secs
+                     FROM transcriptions
+                     ORDER BY created_at DESC, id DESC
+                     LIMIT ?1",
+                )
+                .map_err(classify_sqlite_error)?;
+            let rows = statement
+                .query_map(params![clamped_limit], |row| {
+                    Ok(TranscriptionEntry {
+                        id: row.get(0)?,
+                        text: row.get(1)?,
+                        created_at: row.get(2)?,
+                        duration_secs: row.get(3)?,
+                    })
+                })
+                .map_err(classify_sqlite_error)?;
+
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(classify_sqlite_error)
+        }
     }
 
     pub fn add(&self, text: &str, duration_secs: i64) -> Result<TranscriptionEntry, String> {
@@ -67,6 +101,61 @@ impl TranscriptionStore {
         let id = connection.last_insert_rowid();
         self.get(id)?
             .ok_or_else(|| "Transcription history entry could not be saved".to_string())
+    }
+
+    pub fn delete(&self, id: i64) -> Result<(), String> {
+        let connection = self.open()?;
+        connection
+            .execute("DELETE FROM transcriptions WHERE id = ?1", params![id])
+            .map_err(classify_sqlite_error)?;
+        Ok(())
+    }
+
+    pub fn get(&self, id: i64) -> Result<Option<TranscriptionEntry>, String> {
+        let connection = self.open()?;
+        let result = connection.query_row(
+            "SELECT id, text, created_at, duration_secs FROM transcriptions WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(TranscriptionEntry {
+                    id: row.get(0)?,
+                    text: row.get(1)?,
+                    created_at: row.get(2)?,
+                    duration_secs: row.get(3)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(entry) => Ok(Some(entry)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(classify_sqlite_error(e)),
+        }
+    }
+
+    pub fn latest(&self) -> Result<Option<TranscriptionEntry>, String> {
+        let connection = self.open()?;
+        let result = connection.query_row(
+            "SELECT id, text, created_at, duration_secs
+             FROM transcriptions
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1",
+            [],
+            |row| {
+                Ok(TranscriptionEntry {
+                    id: row.get(0)?,
+                    text: row.get(1)?,
+                    created_at: row.get(2)?,
+                    duration_secs: row.get(3)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(entry) => Ok(Some(entry)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(classify_sqlite_error(e)),
+        }
     }
 
     fn initialize(&self) -> Result<(), String> {
@@ -91,31 +180,17 @@ impl TranscriptionStore {
             .map_err(classify_sqlite_error)
     }
 
-    fn get(&self, id: i64) -> Result<Option<TranscriptionEntry>, String> {
-        let connection = self.open()?;
-        let result = connection.query_row(
-            "SELECT id, text, created_at, duration_secs FROM transcriptions WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(TranscriptionEntry {
-                    id: row.get(0)?,
-                    text: row.get(1)?,
-                    created_at: row.get(2)?,
-                    duration_secs: row.get(3)?,
-                })
-            },
-        );
-
-        match result {
-            Ok(entry) => Ok(Some(entry)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(classify_sqlite_error(e)),
-        }
-    }
-
     fn open(&self) -> Result<Connection, String> {
         Connection::open(&self.path).map_err(classify_sqlite_error)
     }
+}
+
+fn like_pattern(query: &str) -> String {
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{}%", escaped)
 }
 
 fn normalize_text(text: &str) -> Result<String, String> {

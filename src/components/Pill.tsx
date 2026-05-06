@@ -6,9 +6,9 @@ import './Pill.css';
 
 const STATE_LABELS: Record<EngineStateType, string> = {
   Idle: 'wisprflow ready',
-  Recording: 'Recording',
+  Listening: 'Listening',
   Transcribing: 'Transcribing',
-  Cleaning: 'Cleaning',
+  Refining: 'Refining',
   Inserting: 'Inserting',
   Error: 'Error',
 };

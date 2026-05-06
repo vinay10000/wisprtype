@@ -23,9 +23,9 @@ const MIN_REFINEMENT_WORDS: usize = 15;
 #[serde(tag = "state", content = "message")]
 pub enum EngineState {
     Idle,
-    Recording,
+    Listening,
     Transcribing,
-    Cleaning,
+    Refining,
     Inserting,
     Error(String),
 }
@@ -110,7 +110,7 @@ impl CoreEngine {
     }
 
     fn successful_text_states() -> [EngineState; 2] {
-        [EngineState::Cleaning, EngineState::Inserting]
+        [EngineState::Refining, EngineState::Inserting]
     }
 
     fn key_is_down(key: VIRTUAL_KEY) -> bool {
@@ -163,7 +163,7 @@ impl CoreEngine {
 
         match audio.start() {
             Ok(_) => {
-                self.emit_state(EngineState::Recording);
+                self.emit_state(EngineState::Listening);
                 true
             }
             Err(e) => {
@@ -282,7 +282,7 @@ mod tests {
     fn successful_text_flow_emits_cleaning_before_inserting() {
         assert_eq!(
             CoreEngine::successful_text_states(),
-            [EngineState::Cleaning, EngineState::Inserting]
+            [EngineState::Refining, EngineState::Inserting]
         );
     }
 

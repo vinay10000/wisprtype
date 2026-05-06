@@ -136,17 +136,17 @@
   right: 24px;
 }
 
-/* Recording: first reference variant, a restrained red waveform pulse. */
-.pill--recording {
+/* Listening: first reference variant, a restrained red waveform pulse. */
+.pill--listening {
   --accent: #ff625d;
   --accent-rgb: 255, 98, 93;
   background:
     radial-gradient(ellipse at 50% 50%, rgba(255, 69, 62, 0.2), transparent 34%),
     linear-gradient(180deg, rgba(29, 7, 13, 0.92), rgba(8, 2, 5, 0.94));
-  animation: recording-shell 1.65s ease-in-out infinite;
+  animation: listening-shell 1.65s ease-in-out infinite;
 }
 
-.pill--recording .pill-wave {
+.pill--listening .pill-wave {
   top: 50%;
   height: 12px;
   border: 0;
@@ -183,8 +183,8 @@
   animation-delay: -1.35s;
 }
 
-/* Cleaning: first reference variant, violet shimmer ribbon. */
-.pill--cleaning {
+/* Refining: first reference variant, violet shimmer ribbon. */
+.pill--refining {
   --accent: #b45aff;
   --accent-rgb: 180, 90, 255;
   background:
@@ -192,7 +192,7 @@
     linear-gradient(180deg, rgba(29, 9, 55, 0.91), rgba(9, 4, 20, 0.94));
 }
 
-.pill--cleaning .pill-wave {
+.pill--refining .pill-wave {
   top: 49%;
   opacity: 1;
   border-color: rgba(220, 104, 255, 0.9);
@@ -200,7 +200,7 @@
   animation: cleaning-ribbon 1.9s ease-in-out infinite;
 }
 
-.pill--cleaning .pill-wave--two {
+.pill--refining .pill-wave--two {
   border-color: rgba(125, 61, 255, 0.78);
   transform: rotate(184deg) scaleX(0.86);
   animation-delay: -800ms;
@@ -290,7 +290,7 @@
   text-align: center;
 }
 
-@keyframes recording-shell {
+@keyframes listening-shell {
   0%, 100% { box-shadow: 0 0 14px rgba(255, 98, 93, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.12); }
   50% { box-shadow: 0 0 24px rgba(255, 98, 93, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.16); }
 }

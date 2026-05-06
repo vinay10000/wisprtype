@@ -3,9 +3,9 @@ import { listen } from '@tauri-apps/api/event';
 
 export type EngineStateType =
   | 'Idle'
-  | 'Recording'
+  | 'Listening'
   | 'Transcribing'
-  | 'Cleaning'
+  | 'Refining'
   | 'Inserting'
   | 'Error';
 
